@@ -1,9 +1,9 @@
 # type: ignore[all]
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from textwrap import dedent
-from typing import Any, TypeVar, get_args, get_origin
+from typing import Any, TypeVar, get_args, get_origin, Type, Optional
 from typing_extensions import ParamSpec
 
 import inspect
@@ -613,7 +613,7 @@ def prepare_response_model(response_model: type[T] | None) -> type[T] | None:
     1. If the response_model is None, it returns None.
     2. If it's a simple type, it wraps it in a ModelAdapter.
     3. If it's a TypedDict, it converts it to a Pydantic BaseModel.
-    4. If it's an Iterable, it wraps the element type in an IterableModel.
+    4. If it's an Iterable or Iterator, it wraps the element type in an IterableModel.
     5. If it's not already a subclass of OpenAISchema, it applies the openai_schema decorator.
 
     Args:
@@ -634,15 +634,44 @@ def prepare_response_model(response_model: type[T] | None) -> type[T] | None:
             **{k: (v, ...) for k, v in response_model.__annotations__.items()},
         )
 
-    if get_origin(response_model) is Iterable:
+    if get_origin(response_model) in {Iterable, Iterator}:
         iterable_element_class = get_args(response_model)[0]
         response_model = IterableModel(iterable_element_class)
+
+    if not inspect.isclass(response_model):
+        raise TypeError(f"Expected a class for response_model, got {type(response_model)}")
 
     if not issubclass(response_model, OpenAISchema):
         response_model = openai_schema(response_model)  # type: ignore
 
     return response_model
 
+
+def handle_boto3_tools(
+    response_model: type[T], 
+    kwargs: dict[str, Any]
+) -> tuple[type[T], dict[str, Any]]:
+    """Handle Boto3 tools mode."""
+    if kwargs.get("stream", False):
+        raise ValueError("Stream is not supported for Bedrock Tool Calling")
+    
+    # Add function schema to tools
+    kwargs["tools"] = [{
+        "type": "function",
+        "function": response_model.openai_schema,
+    }]
+    
+    # Set tool choice
+    kwargs["tool_choice"] = {
+        "type": "function",
+        "function": {"name": response_model.openai_schema["name"]},
+    }
+    
+    return response_model, kwargs
+
+def handle_boto3_json(response_model: type[T], kwargs: dict[str, Any]) -> tuple[type[T], dict[str, Any]]:
+    """Handle Boto3 JSON mode."""
+    return handle_json_modes(response_model, kwargs, Mode.BOTO3_JSON)
 
 def handle_response_model(
     response_model: type[T] | None, mode: Mode = Mode.TOOLS, **kwargs: Any
@@ -691,17 +720,18 @@ def handle_response_model(
     if mode in {Mode.PARALLEL_TOOLS}:
         return handle_parallel_tools(response_model, new_kwargs)
 
+    # Prepare the response model
     response_model = prepare_response_model(response_model)
 
-    mode_handlers = {  # type: ignore
+    mode_handlers = {
         Mode.FUNCTIONS: handle_functions,
         Mode.TOOLS_STRICT: handle_tools_strict,
         Mode.TOOLS: handle_tools,
         Mode.MISTRAL_TOOLS: handle_mistral_tools,
         Mode.JSON_O1: handle_json_o1,
-        Mode.JSON: lambda rm, nk: handle_json_modes(rm, nk, Mode.JSON),  # type: ignore
-        Mode.MD_JSON: lambda rm, nk: handle_json_modes(rm, nk, Mode.MD_JSON),  # type: ignore
-        Mode.JSON_SCHEMA: lambda rm, nk: handle_json_modes(rm, nk, Mode.JSON_SCHEMA),  # type: ignore
+        Mode.JSON: lambda rm, nk: handle_json_modes(rm, nk, Mode.JSON),
+        Mode.MD_JSON: lambda rm, nk: handle_json_modes(rm, nk, Mode.MD_JSON),
+        Mode.JSON_SCHEMA: lambda rm, nk: handle_json_modes(rm, nk, Mode.JSON_SCHEMA),
         Mode.ANTHROPIC_TOOLS: handle_anthropic_tools,
         Mode.ANTHROPIC_JSON: handle_anthropic_json,
         Mode.COHERE_JSON_SCHEMA: handle_cohere_json_schema,
@@ -715,6 +745,9 @@ def handle_response_model(
         Mode.FIREWORKS_JSON: handle_fireworks_json,
         Mode.FIREWORKS_TOOLS: handle_fireworks_tools,
         Mode.WRITER_TOOLS: handle_writer_tools,
+        # Add Boto3 handlers
+        Mode.BOTO3_TOOLS: lambda rm, nk: handle_json_modes(rm, nk, Mode.BOTO3_TOOLS),
+        Mode.BOTO3_JSON: lambda rm, nk: handle_json_modes(rm, nk, Mode.BOTO3_JSON),
     }
 
     if mode in mode_handlers:

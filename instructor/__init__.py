@@ -48,7 +48,6 @@ __all__ = [
     "handle_response_model",
 ]
 
-
 if importlib.util.find_spec("anthropic") is not None:
     from .client_anthropic import from_anthropic
 
@@ -96,3 +95,8 @@ if importlib.util.find_spec("writerai") is not None:
     from .client_writer import from_writer
 
     __all__ += ["from_writer"]
+
+if importlib.util.find_spec("boto3") is not None:
+    from .client_boto3 import from_boto3
+
+    __all__ += ["from_boto3"]

@@ -27,6 +27,10 @@ class Mode(enum.Enum):
     FIREWORKS_TOOLS = "fireworks_tools"
     FIREWORKS_JSON = "fireworks_json"
     WRITER_TOOLS = "writer_tools"
+    BEDROCK_JSON = "bedrock_json"
+    BEDROCK_TOOLS = "bedrock_tools"
+    BOTO3_TOOLS = "boto3_tools"
+    BOTO3_JSON = "boto3_json"
 
     @classmethod
     def warn_mode_functions_deprecation(cls):

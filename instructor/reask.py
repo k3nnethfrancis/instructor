@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from typing import Any, TypeVar
 
 from instructor.mode import Mode
@@ -319,10 +320,89 @@ def reask_writer_tools(
     return kwargs
 
 
+def reask_bedrock_tools(
+    kwargs: dict[str, Any],
+    response: Any,
+    exception: Exception,
+) -> dict[str, Any]:
+    """Handle reask for Bedrock tools mode.
+
+    Args:
+        kwargs: The original keyword arguments for the request.
+        response: The raw response from Bedrock.
+        exception: The exception that was raised during parsing.
+
+    Returns:
+        Updated keyword arguments with reask messages appended.
+    """
+    kwargs = kwargs.copy()
+
+    try:
+        # Parse the response body
+        body_content = response['body']
+        if isinstance(body_content, bytes):
+            body_content = body_content.decode('utf-8')
+        body = json.loads(body_content)
+        content_text = body['results'][0]['outputText']
+        content = json.loads(content_text)
+
+        # Add the assistant's response
+        reask_msgs = [{"role": "assistant", "content": json.dumps(content)}]
+
+        # Add the error message
+        reask_msgs.append({
+            "role": "user",
+            "content": f"Validation Error found:\n{exception}\nRecall the function correctly, fix the errors"
+        })
+
+    except (KeyError, json.JSONDecodeError) as e:
+        logger.debug(f"Error parsing Bedrock response: {e}")
+        reask_msgs = [{
+            "role": "user",
+            "content": f"Error parsing response. Validation Error found:\n{exception}\nPlease try again."
+        }]
+
+    kwargs["messages"].extend(reask_msgs)
+    return kwargs
+
+
+def reask_bedrock_json(
+    kwargs: dict[str, Any],
+    response: Any,
+    exception: Exception,
+) -> dict[str, Any]:
+    """Handle reask for Bedrock JSON mode."""
+    kwargs = kwargs.copy()
+    
+    try:                                                                                                                                        
+        # Parse the response body
+        body_content = response['body']
+        if isinstance(body_content, bytes):
+            body_content = body_content.decode('utf-8')
+        body = json.loads(body_content)
+        content_text = body['results'][0]['outputText']
+        content = json.loads(content_text)
+        
+        reask_msgs = [{
+            "role": "user",
+            "content": f"""Validation Errors found:\n{exception}\nRecall the function correctly, fix the errors found in the following attempt:\n{content}"""
+        }]
+        
+    except (KeyError, json.JSONDecodeError) as e:
+        logger.debug(f"Error parsing Bedrock response: {e}")
+        reask_msgs = [{
+            "role": "user",
+            "content": f"Error parsing response. Validation Error found:\n{exception}\nPlease try again."
+        }]
+    
+    kwargs["messages"].extend(reask_msgs)
+    return kwargs
+
+
 def handle_reask_kwargs(
     kwargs: dict[str, Any],
     mode: Mode,
-    response: Any,  # Replace with actual response type based on the mode
+    response: Any,
     exception: Exception,
 ):
     kwargs = kwargs.copy()
@@ -343,6 +423,8 @@ def handle_reask_kwargs(
         Mode.FIREWORKS_TOOLS: reask_fireworks_tools,
         Mode.FIREWORKS_JSON: reask_fireworks_json,
         Mode.WRITER_TOOLS: reask_writer_tools,
+        Mode.BOTO3_TOOLS: reask_bedrock_tools,  # Add Bedrock handlers
+        Mode.BOTO3_JSON: reask_bedrock_json,
     }
     reask_function = functions.get(mode, reask_default)
     return reask_function(kwargs=kwargs, response=response, exception=exception)

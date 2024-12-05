@@ -1,2 +1,10 @@
 [virtualenvs]
 in-project = true
+
+[tool.poetry.dependencies]
+# Existing dependencies...
+boto3 = { version = "^1.28.0", optional = true }
+
+[tool.poetry.extras]
+# Existing extras...
+boto3 = ["boto3"]

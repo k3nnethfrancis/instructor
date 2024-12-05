@@ -2,7 +2,7 @@
 import json
 import logging
 from functools import wraps
-from typing import Annotated, Any, Optional, TypeVar, cast
+from typing import Annotated, Any, Optional, TypeVar, cast, Iterator
 from docstring_parser import parse
 from openai.types.chat import ChatCompletion
 from pydantic import (
@@ -11,6 +11,7 @@ from pydantic import (
     Field,
     TypeAdapter,
     create_model,
+    ValidationError,
 )
 
 from instructor.exceptions import IncompleteOutputException
@@ -112,6 +113,10 @@ class OpenAISchema(BaseModel):
         Returns:
             cls (OpenAISchema): An instance of the class
         """
+                # Add Bedrock handlers
+        if mode in {Mode.BOTO3_TOOLS, Mode.BOTO3_JSON}:
+            return cls.parse_boto3(completion, validation_context, strict)
+        
         if mode == Mode.ANTHROPIC_TOOLS:
             return cls.parse_anthropic_tools(completion, validation_context, strict)
 
@@ -140,7 +145,11 @@ class OpenAISchema(BaseModel):
             return cls.parse_writer_tools(completion, validation_context, strict)
 
         if completion.choices[0].finish_reason == "length":
-            raise IncompleteOutputException(last_completion=completion)
+            # raise IncompleteOutputException(last_completion=completion)
+            raise ValidationError(
+                [ErrorWrapper(exc=ValueError("Response was truncated"), loc=("response",))],
+                model=cls,
+            )
 
         if mode == Mode.FUNCTIONS:
             Mode.warn_mode_functions_deprecation()
@@ -387,6 +396,88 @@ class OpenAISchema(BaseModel):
             strict=strict,
         )
 
+    @classmethod
+    def parse_boto3(
+        cls,
+        completion: dict,
+        validation_context: Optional[dict[str, Any]] = None,
+        strict: Optional[bool] = True,
+    ) -> BaseModel:
+        """Parse a Bedrock response.
+
+        Args:
+            completion: The raw response from Bedrock
+            validation_context: Optional validation context
+            strict: Whether to use strict parsing
+
+        Returns:
+            BaseModel: The parsed response
+        """
+        try:
+            # Parse the response body
+            body = json.loads(completion['body']) if isinstance(completion['body'], bytes) else completion['body']
+
+            # Extract the actual content from Bedrock's response structure
+            if 'results' in body:
+                content = json.loads(body['results'][0]['outputText'])
+            else:
+                content = body
+
+            # Check for error response
+            if isinstance(content, dict) and 'error' in content:
+                raise ValueError(f"{content['error']}: {content.get('details', '')}")
+
+            # Create model instance
+            return cls.model_validate(content)
+        except Exception as e:
+            raise ValidationError.from_exception_data(
+                'ValidationError',
+                [
+                    {
+                        'type': 'value_error',
+                        'loc': ('response',),
+                        'msg': str(e),
+                        'input': completion,
+                        'ctx': {'error': str(e)}
+                    }
+                ]
+            )
+
+    @classmethod
+    def parse_boto3_stream(
+        cls,
+        completion: dict,
+        validation_context: Optional[dict[str, Any]] = None,
+        strict: Optional[bool] = True,
+    ) -> Iterator[BaseModel]:
+        """Parse a streaming Bedrock response.
+
+        Args:
+            completion: The raw streaming response from Bedrock
+            validation_context: Optional validation context
+            strict: Whether to use strict parsing
+
+        Returns:
+            Iterator[BaseModel]: An iterator over the parsed response chunks
+        """
+        try:
+            # The body is an iterator over chunks
+            body = completion['body']
+            for chunk in body:
+                # Each chunk is bytes, decode and parse it
+                chunk_data = json.loads(chunk.decode('utf-8'))
+                content = json.loads(chunk_data['results'][0]['outputText'])
+                yield cls.model_validate(content)
+        except Exception as e:
+            raise ValidationError([
+                {
+                    'type': 'value_error',
+                    'loc': ('response',),
+                    'msg': str(e),
+                    'input': chunk
+                }
+            ], model=cls) from e
+
 
 def openai_schema(cls: type[BaseModel]) -> OpenAISchema:
     if not issubclass(cls, BaseModel):
@@ -399,3 +490,9 @@ def openai_schema(cls: type[BaseModel]) -> OpenAISchema:
         )
     )
     return cast(OpenAISchema, schema)
+
+
+class FunctionCall:
+    """Represents a function call for AWS Boto3 operations."""
+    # Add necessary implementation
+    pass
