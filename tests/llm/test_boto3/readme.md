@@ -47,19 +47,48 @@ Implemented specific handling for Bedrock's response format:
 - ✅ Base64 decoding
 - ✅ JSON parsing
 
+## Example Usage
+```python
+import boto3
+import instructor
+from pydantic import BaseModel
+
+class User(BaseModel):
+    name: str
+    age: int
+
+# Initialize and patch the client
+bedrock = boto3.client('bedrock-runtime')
+client = instructor.from_boto3(bedrock)
+
+# Get structured response
+response = client.invoke_model(
+    modelId="anthropic.claude-v2",
+    contentType="application/json",
+    accept="application/json",
+    body=json.dumps({
+        "prompt": "\n\nHuman: Extract: Alice is 30 years old\n\nAssistant:",
+        "max_tokens_to_sample": 1000,
+        "temperature": 0.7,
+        "anthropic_version": "bedrock-2023-05-31"
+    })
+)
+```
+
 ## Review Notes
-This implementation complements the existing Bedrock support by adding direct boto3 integration, giving users more flexibility in how they interact with AWS services.
+- Implementation follows existing client patterns
+- Maintains compatibility with boto3's native interface
+- Adds structured output capabilities to Bedrock
+- Includes comprehensive test coverage
+- Provides working examples in `examples/boto3_bedrock/`
 
-### Key Files Modified
-```
-instructor/
-├── __init__.py          # Added from_boto3
-├── mode.py             # Added BOTO3 modes
-├── client_boto3.py     # New file
-└── function_calls.py   # Updated for boto3 support
-```
-
-### Testing Locally
-1. Configure AWS credentials
+## Testing Locally
+1. Configure AWS credentials:
+   ```bash
+   export AWS_ACCESS_KEY_ID="your-key"
+   export AWS_SECRET_ACCESS_KEY="your-secret"
+   export AWS_DEFAULT_REGION="us-west-2"
+   ```
 2. Install test dependencies: `pip install -r requirements-test.txt`
 3. Run tests: `pytest tests/llm/test_boto3/`
+4. Try example: `python -m examples.boto3_bedrock.run`
