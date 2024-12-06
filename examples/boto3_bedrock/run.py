@@ -1,35 +1,39 @@
+from pydantic import BaseModel
 import boto3
 import instructor
-from pydantic import BaseModel
-import json
+from instructor.function_calls import openai_schema
 
-# Define our Pydantic models
+# Initialize the Bedrock client
+bedrock = boto3.client('bedrock-runtime')
+
+# Patch the client with instructor
+client = instructor.from_boto3(bedrock)
+
+
+@openai_schema
 class Properties(BaseModel):
     key: str
     value: str
 
+
+@openai_schema
 class User(BaseModel):
     name: str
     age: int
     properties: list[Properties]
 
-# Initialize the Bedrock client and patch it with instructor
-bedrock = boto3.client('bedrock-runtime')
-client = instructor.from_boto3(bedrock, mode=instructor.Mode.BOTO3_TOOLS)
 
-# Create a structured response
-response = client.invoke_model(
-    modelId="anthropic.claude-v2",
-    contentType="application/json",
-    accept="application/json",
-    body=json.dumps({
-        "prompt": "\n\nHuman: Create a user for a model with a name, age, and properties.\n\nAssistant:",
-        "max_tokens_to_sample": 1000,
-        "temperature": 0.7,
-        "anthropic_version": "bedrock-2023-05-31"
-    })
+user = client.chat.completions.create(
+    model="anthropic.claude-3-5-sonnet-20241022-v2:0",
+    max_tokens=1024,
+    max_retries=2,
+    messages=[
+        {
+            "role": "user",
+            "content": "Create a user named John who is 30 years old. with properties: email=john@example.com and role=user",
+        }
+    ],
+    response_model=User,
 )
 
-# Parse and print the response
-response_body = json.loads(response['body'].read())
-print(json.dumps(response_body, indent=2))
+print(user.model_dump_json(indent=2))

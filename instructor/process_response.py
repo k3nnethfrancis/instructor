@@ -34,6 +34,9 @@ T_Retval = TypeVar("T_Retval")
 T_ParamSpec = ParamSpec("T_ParamSpec")
 T = TypeVar("T")
 
+__all__ = [
+    'handle_boto3_tools',
+]
 
 async def process_response_async(
     response: ChatCompletion,
@@ -648,30 +651,48 @@ def prepare_response_model(response_model: type[T] | None) -> type[T] | None:
 
 
 def handle_boto3_tools(
-    response_model: type[T], 
-    kwargs: dict[str, Any]
+    response_model: type[T], new_kwargs: dict[str, Any]
 ) -> tuple[type[T], dict[str, Any]]:
-    """Handle Boto3 tools mode."""
-    if kwargs.get("stream", False):
-        raise ValueError("Stream is not supported for Bedrock Tool Calling")
+    """Handle Boto3 tools mode for Claude models in Bedrock."""
+    schema = response_model.openai_schema
     
-    # Add function schema to tools
-    kwargs["tools"] = [{
-        "type": "function",
-        "function": response_model.openai_schema,
-    }]
-    
-    # Set tool choice
-    kwargs["tool_choice"] = {
-        "type": "function",
-        "function": {"name": response_model.openai_schema["name"]},
-    }
-    
-    return response_model, kwargs
+    # Format messages for Bedrock
+    messages = []
+    for m in new_kwargs.get("messages", []):
+        if m["role"] == "system":
+            continue  # Handle system messages separately
+        messages.append({
+            "role": m["role"],
+            "content": [{"text": m["content"]}]
+        })
+
+    new_kwargs["messages"] = messages
+
+    # Add tool config if needed
+    if schema:
+        new_kwargs["toolConfig"] = {
+            "tools": [{
+                "toolSpec": {
+                    "name": schema["name"],
+                    "description": schema.get("description", ""),
+                    "inputSchema": {
+                        "json": {
+                            "type": "object",
+                            "properties": schema["parameters"]["properties"],
+                            "required": schema["parameters"].get("required", [])
+                        }
+                    }
+                }
+            }]
+        }
+
+    return response_model, new_kwargs
+
 
 def handle_boto3_json(response_model: type[T], kwargs: dict[str, Any]) -> tuple[type[T], dict[str, Any]]:
     """Handle Boto3 JSON mode."""
     return handle_json_modes(response_model, kwargs, Mode.BOTO3_JSON)
+
 
 def handle_response_model(
     response_model: type[T] | None, mode: Mode = Mode.TOOLS, **kwargs: Any
@@ -746,8 +767,8 @@ def handle_response_model(
         Mode.FIREWORKS_TOOLS: handle_fireworks_tools,
         Mode.WRITER_TOOLS: handle_writer_tools,
         # Add Boto3 handlers
-        Mode.BOTO3_TOOLS: lambda rm, nk: handle_json_modes(rm, nk, Mode.BOTO3_TOOLS),
-        Mode.BOTO3_JSON: lambda rm, nk: handle_json_modes(rm, nk, Mode.BOTO3_JSON),
+        Mode.BOTO3_TOOLS: handle_boto3_tools,
+        Mode.BOTO3_JSON: handle_boto3_json,
     }
 
     if mode in mode_handlers:

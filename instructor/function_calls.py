@@ -13,6 +13,7 @@ from pydantic import (
     create_model,
     ValidationError,
 )
+import base64
 
 from instructor.exceptions import IncompleteOutputException
 from instructor.mode import Mode
@@ -92,6 +93,24 @@ class OpenAISchema(BaseModel):
             parameters=map_to_gemini_function_schema(cls.openai_schema["parameters"]),
         )
         return function
+
+    @classproperty
+    def boto3_schema(cls) -> dict[str, Any]:
+        """Get the schema in Bedrock's format for Claude models."""
+        schema = cls.openai_schema
+        return {
+            "toolSpec": {
+                "name": schema["name"],
+                "description": schema.get("description", ""),
+                "inputSchema": {
+                    "json": {
+                        "type": "object",
+                        "properties": schema["parameters"]["properties"],
+                        "required": schema["parameters"].get("required", [])
+                    }
+                }
+            }
+        }
 
     @classmethod
     def from_response(
@@ -416,16 +435,13 @@ class OpenAISchema(BaseModel):
         try:
             # Parse the response body
             body = json.loads(completion['body']) if isinstance(completion['body'], bytes) else completion['body']
-
+            
             # Extract the actual content from Bedrock's response structure
-            if 'results' in body:
-                content = json.loads(body['results'][0]['outputText'])
+            if 'content' in body:
+                # Parse the JSON string in the text field
+                content = json.loads(body['content'][0]['text'])
             else:
                 content = body
-
-            # Check for error response
-            if isinstance(content, dict) and 'error' in content:
-                raise ValueError(f"{content['error']}: {content.get('details', '')}")
 
             # Create model instance
             return cls.model_validate(content)
@@ -464,10 +480,17 @@ class OpenAISchema(BaseModel):
             # The body is an iterator over chunks
             body = completion['body']
             for chunk in body:
-                # Each chunk is bytes, decode and parse it
-                chunk_data = json.loads(chunk.decode('utf-8'))
-                content = json.loads(chunk_data['results'][0]['outputText'])
-                yield cls.model_validate(content)
+                # Each chunk is a dict with base64 encoded content
+                chunk_bytes = base64.b64decode(chunk['chunk']['bytes'])
+                chunk_data = json.loads(chunk_bytes)
+                
+                # Extract the text content from the delta
+                if chunk_data.get('type') == 'content_block_delta':
+                    delta = chunk_data.get('delta', {})
+                    if delta.get('type') == 'text_delta':
+                        content = json.loads(delta['text'])
+                        yield cls.model_validate(content)
+
         except Exception as e:
             raise ValidationError([
                 {
