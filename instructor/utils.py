@@ -49,6 +49,7 @@ class Provider(Enum):
     GROQ = "groq"
     MISTRAL = "mistral"
     COHERE = "cohere"
+    BOTO3 = "boto3"
     GEMINI = "gemini"
     DATABRICKS = "databricks"
     CEREBRAS = "cerebras"
